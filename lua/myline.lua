@@ -47,7 +47,7 @@ function M.setup(opts)
   end
 
   vim.opt.laststatus = 2
-  vim.opt.statusline = "%!v:lua.require('statusline').build_statusline()"
+  vim.opt.statusline = "%!v:lua.require('myline').build_statusline()"
 
   if M.config.suppress_messages then
     vim.opt.showmode = false
