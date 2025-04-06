@@ -33,7 +33,7 @@ function M.setup(opts)
     })
   end
   
-  vim.opt.statusline = "%!v:lua.require('statusline').build()"
+  vim.opt.statusline = "%!v:lua.require('myline').build()"
   vim.opt.laststatus = 2
 end
 
