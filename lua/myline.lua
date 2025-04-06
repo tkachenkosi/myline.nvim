@@ -8,67 +8,70 @@ local defaults = {
     insert = { bg = "#3c3836", fg = "#83a598" },
     replace = { bg = "#3c3836", fg = "#fb4934" },
     command = { bg = "#3c3836", fg = "#8ec07c" },
-
     file = { bg = "#504945", fg = "#ebdbb2" },
     modified = { bg = "#504945", fg = "#fb4934" },
-
-    position = { bg = "#665c54", fg = "#ebdbb2" },
-
-		-- Добавляем цвета для выделения текста
-		-- nil означает использовать тему по умолчанию
-    visual_hl = { bg = nil, fg = nil }
+    position = { bg = "#665c54", fg = "#ebdbb2" }
   },
   separator = " ",
-	suppress_messages = true
+  suppress_messages = true
 }
 
-M.config = vim.deepcopy(defaults) -- Инициализируем config с дефолтными значениями
+M.config = vim.deepcopy(defaults)
 
 -- Инициализация плагина
 function M.setup(opts)
   opts = opts or {}
   M.config = vim.tbl_deep_extend("force", M.config, opts)
-
-  -- Устанавливаем highlight группы
+  
+  -- Устанавливаем только наши highlight группы
   for group, colors in pairs(M.config.colors) do
-		if not (group == "visual_hl" and colors.bg == nil and colors.fg == nil) then
-			vim.api.nvim_set_hl(0, group, {
-				fg = colors.fg,
-				bg = colors.bg,
-				bold = true
-			})
-		end
+    if not string.match(group, "_hl$") then -- Пропускаем группы для выделения
+      vim.api.nvim_set_hl(0, "Status"..group:gsub("^%l", string.upper), {
+        fg = colors.fg,
+        bg = colors.bg,
+        bold = true
+      })
+    end
   end
-
-	-- Восстанавливаем цвета выделения, если они не заданы
-  if M.config.colors.visual_hl.bg == nil and M.config.colors.visual_hl.fg == nil then
-    vim.cmd('hi link Visual Visual')
-  else
-    vim.api.nvim_set_hl(0, 'Visual', {
-      fg = M.config.colors.visual_hl.fg,
-      bg = M.config.colors.visual_hl.bg
-    })
-  end
-
-  vim.opt.statusline = "%!v:lua.require('myline').build()"
+  
+  -- Настройка статусной строки
   vim.opt.laststatus = 2
-
-	-- Подавление системных сообщений
+  vim.opt.statusline = "%!v:lua.require('myline').statusline()"
+  
+  -- Подавление системных сообщений
   if M.config.suppress_messages then
-    vim.opt.showmode = false       -- Скрыть -- INSERT -- и подобные
-    vim.opt.shortmess:append("s")  -- Скрыть сообщения о поиске
-    vim.opt.shortmess:append("I")  -- Отключить вступительное сообщение
-    vim.opt.shortmess:append("c")  -- Скрыть сообщения дополнения
+    vim.opt.showmode = false
+    vim.opt.shortmess:append("sIc")
   end
+  
+  -- Автокоманда для обновления статуса при смене буфера
+  vim.api.nvim_create_autocmd({"BufEnter", "ModeChanged", "CursorMoved"}, {
+    callback = function()
+      vim.cmd("redrawstatus")
+    end
+  })
 end
 
--- Форматирование блока с цветами
-local function format_block(text, color)
-  return string.format("%%#%s# %s %%*", color, text)
+-- Получение информации о текущем буфере
+local function get_buffer_info(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local filename = vim.api.nvim_buf_get_name(bufnr)
+  filename = filename ~= "" and vim.fn.fnamemodify(filename, ":t") or "[No Name]"
+  local modified = vim.api.nvim_buf_get_option(bufnr, "modified") and "[+]" or ""
+  return filename, modified
 end
 
--- Получение текущего режима
-local function get_mode()
+-- Получение информации о позиции
+local function get_position_info()
+  local line = vim.fn.line(".")
+  local col = vim.fn.col(".")
+  local total_lines = vim.fn.line("$")
+  return string.format("%d:%d/%d", line, col, total_lines)
+end
+
+-- Получение текущего режима для конкретного окна
+local function get_window_mode(winid)
+  winid = winid or vim.api.nvim_get_current_win()
   local mode = vim.api.nvim_get_mode().mode
   local modes = {
     n = "NORMAL",
@@ -81,33 +84,35 @@ local function get_mode()
     s = "SELECT",
     t = "TERMINAL"
   }
-  return modes[mode] or mode
+  return modes[mode] or mode, mode
 end
 
--- Сборка статусной строки
-function M.build()
-  local mode = get_mode()
-  local mode_color = mode:lower()
+-- Форматирование блока с цветами
+local function format_block(text, color)
+  return string.format("%%#Status%s# %s %%*", color:gsub("^%l", string.upper), text)
+end
 
-  -- Блок режима
-  local mode_block = format_block(mode, mode_color)
-
-	-- Блок файла (используем буфер текущего окна)
-  local buf = vim.api.nvim_win_get_buf(0)
-  local filename = vim.api.nvim_buf_get_name(buf)
-  filename = filename ~= "" and vim.fn.fnamemodify(filename, ":t") or "[No Name]"
-  local modified = vim.api.nvim_buf_get_option(buf, "modified") and "[+]" or ""
+-- Основная функция построения статусной строки
+function M.statusline()
+  local winid = vim.api.nvim_get_current_win()
+  local bufnr = vim.api.nvim_win_get_buf(winid)
+  
+  -- Получаем информацию для текущего окна/буфера
+  local mode, mode_key = get_window_mode(winid)
+  local filename, modified = get_buffer_info(bufnr)
+  local position = get_position_info()
+  
+  -- Формируем блоки
+  local mode_block = format_block(mode, mode_key)
   local file_block = format_block(filename .. modified, "file")
-
-  -- Блок позиции (для текущего окна)
-  local line = vim.fn.line(".")
-  local col = vim.fn.col(".")
-  local total_lines = vim.fn.line("$")
-  local position_text = string.format("%d:%d/%d", line, col, total_lines)
-  local position_block = string.format("%%=%%#position# %s %%*", position_text)
-
-	-- Собираем статусную строку
-  return table.concat({ mode_block, file_block, position_block }, M.config.separator)
+  local position_block = string.format("%%=%%#StatusPosition# %s %%*", position)
+  
+  -- Собираем статусную строку
+  return table.concat({
+    mode_block,
+    file_block,
+    position_block
+  }, M.config.separator)
 end
 
 return M
