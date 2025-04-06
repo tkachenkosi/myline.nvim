@@ -12,7 +12,11 @@ local defaults = {
     file = { bg = "#504945", fg = "#ebdbb2" },
     modified = { bg = "#504945", fg = "#fb4934" },
 
-    position = { bg = "#665c54", fg = "#ebdbb2" }
+    position = { bg = "#665c54", fg = "#ebdbb2" },
+
+		-- Добавляем цвета для выделения текста
+		-- nil означает использовать тему по умолчанию
+    visual_hl = { bg = nil, fg = nil }
   },
   separator = " ",
 	suppress_messages = true
@@ -27,10 +31,22 @@ function M.setup(opts)
 
   -- Устанавливаем highlight группы
   for group, colors in pairs(M.config.colors) do
-    vim.api.nvim_set_hl(0, group, {
-      fg = colors.fg,
-      bg = colors.bg,
-      bold = true
+		if not (group == "visual_hl" and colors.bg == nil and colors.fg == nil) then
+			vim.api.nvim_set_hl(0, group, {
+				fg = colors.fg,
+				bg = colors.bg,
+				bold = true
+			})
+		end
+  end
+
+	-- Восстанавливаем цвета выделения, если они не заданы
+  if M.config.colors.visual_hl.bg == nil and M.config.colors.visual_hl.fg == nil then
+    vim.cmd('hi link Visual Visual')
+  else
+    vim.api.nvim_set_hl(0, 'Visual', {
+      fg = M.config.colors.visual_hl.fg,
+      bg = M.config.colors.visual_hl.bg
     })
   end
 
@@ -76,21 +92,21 @@ function M.build()
   -- Блок режима
   local mode_block = format_block(mode, mode_color)
 
-  -- Блок файла
-  local filename = vim.fn.expand("%:t")
-  if filename == "" then filename = "[No Name]" end
-  local modified = vim.bo.modified and "[+]" or ""
+	-- Блок файла (используем буфер текущего окна)
+  local buf = vim.api.nvim_win_get_buf(0)
+  local filename = vim.api.nvim_buf_get_name(buf)
+  filename = filename ~= "" and vim.fn.fnamemodify(filename, ":t") or "[No Name]"
+  local modified = vim.api.nvim_buf_get_option(buf, "modified") and "[+]" or ""
   local file_block = format_block(filename .. modified, "file")
 
-  -- Блок позиции
+  -- Блок позиции (для текущего окна)
   local line = vim.fn.line(".")
   local col = vim.fn.col(".")
   local total_lines = vim.fn.line("$")
-  -- local position_block = format_block(string.format("%d:%d/%d", line, col, total_lines), "position")
-
-	local position_text = string.format("%d:%d/%d", line, col, total_lines)
+  local position_text = string.format("%d:%d/%d", line, col, total_lines)
   local position_block = string.format("%%=%%#position# %s %%*", position_text)
 
+	-- Собираем статусную строку
   return table.concat({ mode_block, file_block, position_block }, M.config.separator)
 end
 
