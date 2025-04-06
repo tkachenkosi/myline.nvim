@@ -23,15 +23,13 @@ function M.setup(opts)
   opts = opts or {}
   M.config = vim.tbl_deep_extend("force", M.config, opts)
   
-  -- Устанавливаем только наши highlight группы
+  -- Устанавливаем highlight группы
   for group, colors in pairs(M.config.colors) do
-    if not string.match(group, "_hl$") then -- Пропускаем группы для выделения
-      vim.api.nvim_set_hl(0, "Status"..group:gsub("^%l", string.upper), {
-        fg = colors.fg,
-        bg = colors.bg,
-        bold = true
-      })
-    end
+    vim.api.nvim_set_hl(0, "Status"..group:gsub("^%l", string.upper), {
+      fg = colors.fg,
+      bg = colors.bg,
+      bold = true
+    })
   end
   
   -- Настройка статусной строки
@@ -43,36 +41,31 @@ function M.setup(opts)
     vim.opt.showmode = false
     vim.opt.shortmess:append("sIc")
   end
-  
-  -- Автокоманда для обновления статуса при смене буфера
-  vim.api.nvim_create_autocmd({"BufEnter", "ModeChanged", "CursorMoved"}, {
-    callback = function()
-      vim.cmd("redrawstatus")
-    end
-  })
 end
 
--- Получение информации о текущем буфере
+-- Получение информации о буфере
 local function get_buffer_info(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local filename = vim.api.nvim_buf_get_name(bufnr)
   filename = filename ~= "" and vim.fn.fnamemodify(filename, ":t") or "[No Name]"
-  local modified = vim.api.nvim_buf_get_option(bufnr, "modified") and "[+]" or ""
+  local modified = vim.api.nvim_buf_get_option(bufnr, "modified") and "+" or ""
   return filename, modified
 end
 
--- Получение информации о позиции
-local function get_position_info()
-  local line = vim.fn.line(".")
-  local col = vim.fn.col(".")
-  local total_lines = vim.fn.line("$")
+-- Получение информации о позиции для конкретного окна
+local function get_position_info(winid)
+  winid = winid or vim.api.nvim_get_current_win()
+  local line = vim.api.nvim_win_get_cursor(winid)[1]
+  local col = vim.api.nvim_win_get_cursor(winid)[2] + 1
+  local total_lines = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
   return string.format("%d:%d/%d", line, col, total_lines)
 end
 
--- Получение текущего режима для конкретного окна
+-- Получение режима для конкретного окна
 local function get_window_mode(winid)
-  winid = winid or vim.api.nvim_get_current_win()
-  local mode = vim.api.nvim_get_mode().mode
+  -- Для получения режима конкретного окна используем глобальную переменную
+  -- которая обновляется через autocommand
+  local mode = vim.w[winid].statusline_mode or "n"
   local modes = {
     n = "NORMAL",
     v = "VISUAL",
@@ -94,13 +87,14 @@ end
 
 -- Основная функция построения статусной строки
 function M.statusline()
-  local winid = vim.api.nvim_get_current_win()
+  -- Получаем ID окна, для которого строится статусная строка
+  local winid = tonumber(vim.g.actual_curwin) or vim.api.nvim_get_current_win()
   local bufnr = vim.api.nvim_win_get_buf(winid)
   
-  -- Получаем информацию для текущего окна/буфера
+  -- Получаем информацию для конкретного окна/буфера
   local mode, mode_key = get_window_mode(winid)
   local filename, modified = get_buffer_info(bufnr)
-  local position = get_position_info()
+  local position = get_position_info(winid)
   
   -- Формируем блоки
   local mode_block = format_block(mode, mode_key)
@@ -114,5 +108,26 @@ function M.statusline()
     position_block
   }, M.config.separator)
 end
+
+-- Autocommands для отслеживания изменений
+local function setup_autocommands()
+  vim.api.nvim_create_autocmd({"ModeChanged", "WinEnter", "BufEnter", "CursorMoved"}, {
+    callback = function()
+      -- Сохраняем текущий режим для всех окон
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(win) then
+          local mode = vim.api.nvim_get_mode().mode
+          vim.w[win].statusline_mode = mode
+        end
+      end
+      -- Устанавливаем глобальную переменную с текущим окном
+      vim.g.actual_curwin = vim.api.nvim_get_current_win()
+      vim.cmd("redrawstatus")
+    end
+  })
+end
+
+-- Инициализация autocommands при загрузке
+setup_autocommands()
 
 return M
