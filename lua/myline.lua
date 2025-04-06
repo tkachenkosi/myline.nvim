@@ -18,11 +18,14 @@ local defaults = {
 
 M.config = vim.deepcopy(defaults)
 
+-- Таблица для хранения состояния каждого окна
+local window_states = {}
+
 -- Инициализация плагина
 function M.setup(opts)
   opts = opts or {}
   M.config = vim.tbl_deep_extend("force", M.config, opts)
-  
+
   -- Устанавливаем highlight группы
   for group, colors in pairs(M.config.colors) do
     vim.api.nvim_set_hl(0, "Status"..group:gsub("^%l", string.upper), {
@@ -31,41 +34,59 @@ function M.setup(opts)
       bold = true
     })
   end
-  
+
   -- Настройка статусной строки
   vim.opt.laststatus = 2
   vim.opt.statusline = "%!v:lua.require('myline').statusline()"
-  
+
   -- Подавление системных сообщений
   if M.config.suppress_messages then
     vim.opt.showmode = false
     vim.opt.shortmess:append("sIc")
   end
+
+  -- Инициализация состояний для существующих окон
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    M.update_window_state(win)
+  end
+
+  -- Установка автокоманд
+  M.setup_autocommands()
 end
 
--- Получение информации о буфере
-local function get_buffer_info(bufnr)
-  bufnr = bufnr or vim.api.nvim_get_current_buf()
-  local filename = vim.api.nvim_buf_get_name(bufnr)
-  filename = filename ~= "" and vim.fn.fnamemodify(filename, ":t") or "[No Name]"
-  local modified = vim.api.nvim_buf_get_option(bufnr, "modified") and "+" or ""
-  return filename, modified
-end
-
--- Получение информации о позиции для конкретного окна
-local function get_position_info(winid)
+-- Обновление состояния конкретного окна
+function M.update_window_state(winid)
   winid = winid or vim.api.nvim_get_current_win()
-  local line = vim.api.nvim_win_get_cursor(winid)[1]
-  local col = vim.api.nvim_win_get_cursor(winid)[2] + 1
-  local total_lines = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
-  return string.format("%d:%d/%d", line, col, total_lines)
+  local bufnr = vim.api.nvim_win_get_buf(winid)
+  
+  window_states[winid] = {
+    mode = vim.api.nvim_get_mode().mode,
+    bufnr = bufnr,
+    filename = M.get_buffer_name(bufnr),
+    modified = vim.api.nvim_buf_get_option(bufnr, "modified"),
+    cursor = vim.api.nvim_win_get_cursor(winid),
+    linecount = vim.api.nvim_buf_line_count(bufnr)
+  }
 end
 
--- Получение режима для конкретного окна
-local function get_window_mode(winid)
-  -- Для получения режима конкретного окна используем глобальную переменную
-  -- которая обновляется через autocommand
-  local mode = vim.w[winid].statusline_mode or "n"
+-- Получение имени буфера
+function M.get_buffer_name(bufnr)
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  return name ~= "" and vim.fn.fnamemodify(name, ":t") or "[No Name]"
+end
+
+-- Форматирование блока с цветами
+local function format_block(text, color)
+  return string.format("%%#Status%s# %s %%*", color:gsub("^%l", string.upper), text)
+end
+
+-- Основная функция построения статусной строки
+function M.statusline()
+  local winid = vim.api.nvim_get_current_win()
+  local state = window_states[winid] or {}
+  
+  -- Получаем информацию для текущего окна
+  local mode = state.mode or "n"
   local modes = {
     n = "NORMAL",
     v = "VISUAL",
@@ -77,27 +98,19 @@ local function get_window_mode(winid)
     s = "SELECT",
     t = "TERMINAL"
   }
-  return modes[mode] or mode, mode
-end
-
--- Форматирование блока с цветами
-local function format_block(text, color)
-  return string.format("%%#Status%s# %s %%*", color:gsub("^%l", string.upper), text)
-end
-
--- Основная функция построения статусной строки
-function M.statusline()
-  -- Получаем ID окна, для которого строится статусная строка
-  local winid = tonumber(vim.g.actual_curwin) or vim.api.nvim_get_current_win()
-  local bufnr = vim.api.nvim_win_get_buf(winid)
+  local mode_text = modes[mode] or mode
+  local mode_key = mode
   
-  -- Получаем информацию для конкретного окна/буфера
-  local mode, mode_key = get_window_mode(winid)
-  local filename, modified = get_buffer_info(bufnr)
-  local position = get_position_info(winid)
+  local filename = state.filename or "[No Name]"
+  local modified = state.modified and "[+]" or ""
+  
+  local line = state.cursor and state.cursor[1] or 1
+  local col = state.cursor and (state.cursor[2] + 1) or 1
+  local total_lines = state.linecount or 1
+  local position = string.format("%d:%d/%d", line, col, total_lines)
   
   -- Формируем блоки
-  local mode_block = format_block(mode, mode_key)
+  local mode_block = format_block(mode_text, mode_key)
   local file_block = format_block(filename .. modified, "file")
   local position_block = string.format("%%=%%#StatusPosition# %s %%*", position)
   
@@ -109,25 +122,57 @@ function M.statusline()
   }, M.config.separator)
 end
 
--- Autocommands для отслеживания изменений
-local function setup_autocommands()
-  vim.api.nvim_create_autocmd({"ModeChanged", "WinEnter", "BufEnter", "CursorMoved"}, {
+-- Установка автокоманд для отслеживания изменений
+function M.setup_autocommands()
+  local group = vim.api.nvim_create_augroup("Statusline", { clear = true })
+
+  -- Обновление при изменении режима
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    group = group,
     callback = function()
-      -- Сохраняем текущий режим для всех окон
       for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_is_valid(win) then
-          local mode = vim.api.nvim_get_mode().mode
-          vim.w[win].statusline_mode = mode
+        if win == vim.api.nvim_get_current_win() then
+          M.update_window_state(win)
         end
       end
-      -- Устанавливаем глобальную переменную с текущим окном
-      vim.g.actual_curwin = vim.api.nvim_get_current_win()
       vim.cmd("redrawstatus")
     end
   })
-end
 
--- Инициализация autocommands при загрузке
-setup_autocommands()
+  -- Обновление при переключении окон
+  vim.api.nvim_create_autocmd("WinEnter", {
+    group = group,
+    callback = function()
+      M.update_window_state(vim.api.nvim_get_current_win())
+      vim.cmd("redrawstatus")
+    end
+  })
+
+  -- Обновление при изменении буфера
+  vim.api.nvim_create_autocmd({"BufEnter", "BufModifiedSet"}, {
+    group = group,
+    callback = function()
+      M.update_window_state(vim.api.nvim_get_current_win())
+      vim.cmd("redrawstatus")
+    end
+  })
+
+  -- Обновление при перемещении курсора
+  vim.api.nvim_create_autocmd({"CursorMoved", "CursorMovedI"}, {
+    group = group,
+    callback = function()
+      M.update_window_state(vim.api.nvim_get_current_win())
+      vim.cmd("redrawstatus")
+    end
+  })
+
+  -- Очистка при закрытии окна
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function(args)
+      window_states[tonumber(args.match)] = nil
+    end
+  })
+end
 
 return M
